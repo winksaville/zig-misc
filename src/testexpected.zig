@@ -23,7 +23,7 @@ pub fn testExpected(expected: []const u8, actual: []const u8) bool {
     return testExpectedStream(std.os.File.WriteError, st, expected, actual);
 }
 
-test "testExpectedError" {
+test "testExpectedError.BufferOutStream" {
     var bytes: [256]u8 = undefined;
     var allocator = &std.heap.FixedBufferAllocator.init(bytes[0..]).allocator;
 
@@ -31,6 +31,22 @@ test "testExpectedError" {
     var buf_stream = &std.io.BufferOutStream.init(&buffer).stream;
     assert(!testExpectedStream(std.io.BufferOutStream.Error, buf_stream, "abd", "abc"));
     assert(std.mem.eql(u8, buffer.toSlice(),
+            \\
+            \\====== expected this output: =========
+            \\abd
+            \\======== instead found this: =========
+            \\abc
+            \\======================================
+            \\
+    ) );
+}
+
+test "testExpectedError.SliceOutStream" {
+    var bytes: [256]u8 = undefined;
+    var slice_stream = &std.io.SliceOutStream.init(bytes[0..]);
+    var stream = &slice_stream.stream;
+    assert(!testExpectedStream(std.io.SliceOutStream.Error, stream, "abd", "abc"));
+    assert(std.mem.eql(u8, slice_stream.getWritten(),
             \\
             \\====== expected this output: =========
             \\abd
