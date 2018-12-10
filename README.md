@@ -8,7 +8,7 @@ return false.
 
 ## Dependencies besides Zig
 
-None
+Needs zig PR 1820: https://github.com/ziglang/zig/pull/1820
 
 ## Test
 ```

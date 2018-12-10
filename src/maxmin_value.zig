@@ -13,6 +13,13 @@ const f64_max = std.math.f64_max;
 const maxInt = std.math.maxInt;
 const minInt = std.math.minInt;
 const assert = std.debug.assert;
+const warn = std.debug.warn;
+
+const DBG = false;
+
+// A bit mask to validate all paths are tested
+// TODO: Validate when tests have concluded that paths_accu is the expected value.
+var paths_accu: u64 = 0;
 
 pub fn maxFloat(comptime T: type) T {
     return switch (T) {
@@ -270,118 +277,259 @@ pub fn saturateCast(comptime T: type, v: var) T {
     const LargestUintType = u128;
     const Tv = @typeOf(v);
 
-    // We have to special cast u0
+    var paths: u64 = 0;
+
+    defer {
+        if (DBG) paths_accu = paths_accu | paths;
+        if (DBG) warn("paths_accu={x} paths={x}\n", paths_accu, paths);
+    }
+
+    // We have to special case u0
     switch (T) {
-        u0 => return 0,
+        u0 => {
+            if (DBG) paths = 0x1000000;
+            return 0;
+        },
         else => {},
     }
     switch (Tv) {
-        u0 => return 0,
+        u0 => {
+            if (DBG) paths = 0x0800000;
+            return 0;
+        },
         else => {},
     }
 
-    var r: T = undefined;
-    return switch (@typeId(T)) {
+    var r: T = 0;
+    switch (@typeId(T)) {
         TypeId.Float => switch (@typeId(Tv)) {
-            TypeId.ComptimeFloat, TypeId.Float => b1: {
+            TypeId.ComptimeFloat, TypeId.Float => {
                 if (v < 0.0) {
-                    r = if (v >= nonInfMinValue(T)) numCast(T, v) else nonInfMinValue(T);
-                    break :b1 r;
+                    if (v >= nonInfMinValue(T)) {
+                        if (DBG) paths = paths | 0x0000001;
+                        r = numCast(T, v);
+                    } else {
+                        if (DBG) paths = paths | 0x0000002;
+                        r = nonInfMinValue(T);
+                    }
                 } else {
-                    r = if (v <= nonInfMaxValue(T)) numCast(T, v) else nonInfMaxValue(T);
-                    break :b1 r;
+                    if (v <= nonInfMaxValue(T)) {
+                        if (DBG) paths = paths | 0x0000004;
+                        r = numCast(T, v);
+                    } else {
+                        if (DBG) paths = paths | 0x0000008;
+                        r = nonInfMaxValue(T);
+                    }
                 }
             },
-            TypeId.ComptimeInt, TypeId.Int => b2: {
+            TypeId.ComptimeInt, TypeId.Int => {
                 var vFloat = @intToFloat(LargestFloatType, v);
                 if (v < 0) {
                     const minFloatT = @floatCast(LargestFloatType, nonInfMinValue(T));
-                    r = if (vFloat >= minFloatT) numCast(T, v) else nonInfMinValue(T);
-                    break :b2 r;
+                    if (vFloat >= minFloatT) {
+                        if (DBG) paths = paths | 0x0000010;
+                        r = numCast(T, v);
+                    } else {
+                        if (DBG) paths = paths | 0x0000020;
+                        r = nonInfMinValue(T);
+                    }
                 } else {
                     const maxFloatT = @floatCast(LargestFloatType, nonInfMaxValue(T));
-                    r = if (vFloat <= maxFloatT) numCast(T, v) else nonInfMaxValue(T);
-                    break :b2 r;
+                    if (vFloat <= maxFloatT) {
+                        if (DBG) paths = paths | 0x0000040;
+                        r = numCast(T, v);
+                    } else {
+                        if (DBG) paths = paths | 0x0000080;
+                        r = nonInfMaxValue(T);
+                    }
                 }
             },
             else => @compileError("Expected Float or Int type"),
         },
         TypeId.Int => switch (@typeId(Tv)) {
-            TypeId.ComptimeFloat, TypeId.Float => b3: {
+            TypeId.ComptimeFloat, TypeId.Float => {
                 if (v < 0.0) {
                     const minFloatT = @intToFloat(LargestFloatType, nonInfMinValue(T));
-                    r = if (v >= minFloatT) numCast(T, v) else nonInfMinValue(T);
-                    break :b3 r;
+                    if (v >= minFloatT) {
+                        if (DBG) paths = paths | 0x0000100;
+                        r = numCast(T, v);
+                    } else {
+                        if (DBG) paths = paths | 0x0000200;
+                        r = nonInfMinValue(T);
+                    }
                 } else {
                     const maxFloatT = @intToFloat(LargestFloatType, nonInfMaxValue(T));
-                    r = if (v <= maxFloatT) numCast(T, v) else nonInfMaxValue(T);
-                    break :b3 r;
+                    if (v <= maxFloatT) {
+                        if (DBG) paths = paths | 0x0000400;
+                        r = numCast(T, v);
+                    } else {
+                        if (DBG) paths = paths | 0x0000800;
+                        r = nonInfMaxValue(T);
+                    }
                 }
             },
-            TypeId.ComptimeInt, TypeId.Int => b4: {
-                if (v < 0) {
-                    r = if (v >= nonInfMinValue(T)) numCast(T, v) else nonInfMinValue(T);
-                    break :b4 r;
+            TypeId.ComptimeInt, TypeId.Int => {
+                if (Tv.is_signed == T.is_signed) {
+                    if (v < 0) {
+                        if (v >= nonInfMinValue(T)) {
+                            if (DBG) paths = paths | 0x0001000;
+                            r = numCast(T, v);
+                        } else {
+                            if (DBG) paths = paths | 0x0002000;
+                            r = nonInfMinValue(T);
+                        }
+                    } else {
+                        if (v <= nonInfMaxValue(T)) {
+                            if (DBG) paths = paths | 0x0004000;
+                            r = numCast(T, v);
+                        } else {
+                            if (DBG) paths = paths | 0x0008000;
+                            r = nonInfMaxValue(T);
+                        }
+                    }
+                } else if (Tv.is_signed) {
+                    if (v < 0) {
+                        if (DBG) paths = paths | 0x0010000;
+                        r = 0;
+                    } else {
+                        if (T.bit_count >= Tv.bit_count) {
+                            if (DBG) paths = paths | 0x0020000;
+                            r = numCast(T, v);
+                        } else {
+                            if (v < numCast(Tv, nonInfMaxValue(T))) {
+                                if (DBG) paths = paths | 0x0040000;
+                                r = numCast(T, v);
+                            } else {
+                                if (DBG) paths = paths | 0x0080000;
+                                r = nonInfMaxValue(T);
+                            }
+                        }
+                    }
                 } else {
-                    r = if (v <= nonInfMaxValue(T)) numCast(T, v) else nonInfMaxValue(T);
-                    break :b4 r;
+                    if (T.bit_count > Tv.bit_count) {
+                        if (DBG) paths = paths | 0x0100000;
+                        r = numCast(T, v);
+                    } else {
+                        if (v > numCast(Tv, nonInfMaxValue(T))) {
+                            if (DBG) paths = paths | 0x0200000;
+                            r = nonInfMaxValue(T);
+                        } else {
+                            if (DBG) paths = paths | 0x0400000;
+                            r = numCast(T, v);
+                        }
+                    }
                 }
             },
             else => @compileError("Expected Float or Int type"),
         },
         else => @compileError("Expected Float or Int type"),
-    };
+    }
+    return r;
 }
 
-test "saturateCast" {
-    assert(nonInfMinValue(f32) == saturateCast(f32, minValue(f64)));
-    assert(nonInfMinValue(f32) == saturateCast(f32, nonInfMinValue(f64)));
-    assert(-1000.123 == saturateCast(f32, f64(-1000.123)));
-    assert(-1.0 == saturateCast(f32, f64(-1.0)));
-    assert(-0.0 == saturateCast(f32, f64(-0.0)));
-    assert(0.0 == saturateCast(f32, f64(0.0)));
-    assert(1 == saturateCast(f32, f64(1)));
-    assert(1000.123 == saturateCast(f32, f64(1000.123)));
-    assert(nonInfMaxValue(f32) == saturateCast(f32, nonInfMaxValue(f64)));
-    assert(nonInfMaxValue(f32) == saturateCast(f32, maxValue(f64)));
+test "saturateCast.floats" {
+    if (DBG) warn("\n");
 
-    assert(nonInfMinValue(f64) == saturateCast(f64, minValue(f64)));
-    assert(nonInfMinValue(f64) == saturateCast(f64, nonInfMinValue(f64)));
-    assert(-1000.123 == saturateCast(f64, f64(-1000.123)));
-    assert(-1.0 == saturateCast(f64, f64(-1.0)));
-    assert(-0.0 == saturateCast(f64, f64(-0.0)));
-    assert(0.0 == saturateCast(f64, f64(0.0)));
-    assert(1 == saturateCast(f64, f64(1)));
-    assert(1000.123 == saturateCast(f64, f64(1000.123)));
-    assert(nonInfMaxValue(f64) == saturateCast(f64, nonInfMaxValue(f64)));
-    assert(nonInfMaxValue(f64) == saturateCast(f64, maxValue(f64)));
+    assert(f16(0) == saturateCast(f16, u0(0)));                             // 0x0400000
+    assert(f32(0) == saturateCast(f32, u0(0)));                             // 0x0400000
+    assert(f64(0) == saturateCast(f64, u0(0)));                             // 0x0400000
+    assert(f128(0) == saturateCast(f128, u0(0)));                           // 0x0400000
 
-    assert(nonInfMinValue(i1) == saturateCast(i1, minValue(f64)));
-    assert(nonInfMinValue(i1) == saturateCast(i1, nonInfMinValue(f64)));
-    assert(-1 == saturateCast(i1, f64(-1123.1)));
-    assert(-1 == saturateCast(i1, f64(-1123.9)));
-    assert(-1 == saturateCast(i1, f64(-1.0)));
-    assert(0 == saturateCast(i1, f64(-0.0)));
-    assert(0 == saturateCast(i1, f64(0.0)));
-    assert(0 == saturateCast(i1, f64(1)));
-    assert(0 == saturateCast(i1, f64(1123.1)));
-    assert(0 == saturateCast(i1, f64(1123.9)));
-    assert(nonInfMaxValue(i1) == saturateCast(i1, nonInfMaxValue(f64)));
-    assert(nonInfMaxValue(i1) == saturateCast(i1, maxValue(f64)));
+    assert(nonInfMinValue(u0) == saturateCast(u0, minValue(f64)));          // 0x0800000
+    assert(nonInfMinValue(u0) == saturateCast(u0, nonInfMinValue(f64)));    // 0x0800000
+    assert(0 == saturateCast(u0, f64(-0.0)));                               // 0x0800000
+    assert(0 == saturateCast(u0, f64(0.0)));                                // 0x0800000
+    assert(0 == saturateCast(u0, f64(1)));                                  // 0x0800000
+    assert(0 == saturateCast(u0, f64(1123)));                               // 0x0800000
+    assert(nonInfMaxValue(u0) == saturateCast(u0, nonInfMaxValue(f64)));    // 0x0800000
+    assert(nonInfMaxValue(u0) == saturateCast(u0, maxValue(f64)));          // 0x0800000
 
-    assert(nonInfMinValue(i32) == saturateCast(i32, minValue(f64)));
-    assert(nonInfMinValue(i32) == saturateCast(i32, nonInfMinValue(f64)));
-    assert(-1123 == saturateCast(i32, f64(-1123.1)));
-    assert(-1123 == saturateCast(i32, f64(-1123.9)));
-    assert(-1 == saturateCast(i32, f64(-1.0)));
-    assert(0 == saturateCast(i32, f64(-0.0)));
-    assert(0 == saturateCast(i32, f64(0.0)));
-    assert(1 == saturateCast(i32, f64(1)));
-    assert(1123 == saturateCast(i32, f64(1123.1)));
-    assert(1123 == saturateCast(i32, f64(1123.9)));
-    assert(nonInfMaxValue(i32) == saturateCast(i32, nonInfMaxValue(f64)));
-    assert(nonInfMaxValue(i32) == saturateCast(i32, maxValue(f64)));
 
+    assert(-1000.123 == saturateCast(f32, f64(-1000.123)));                 // 0x0000001
+    assert(-1.0 == saturateCast(f32, f64(-1.0)));                           // 0x0000001
+    assert(nonInfMinValue(f64) == saturateCast(f64, nonInfMinValue(f64)));  // 0x0000001
+    assert(-1000.123 == saturateCast(f64, f64(-1000.123)));                 // 0x0000001
+    assert(-1.0 == saturateCast(f64, f64(-1.0)));                           // 0x0000001
+
+    assert(nonInfMinValue(f32) == saturateCast(f32, minValue(f64)));        // 0x0000002
+    assert(nonInfMinValue(f32) == saturateCast(f32, nonInfMinValue(f64)));  // 0x0000002
+    assert(nonInfMinValue(f64) == saturateCast(f64, minValue(f64)));        // 0x0000002
+
+    assert(-0.0 == saturateCast(f32, f64(-0.0)));                           // 0x0000004
+    assert(0.0 == saturateCast(f32, f64(0.0)));                             // 0x0000004
+    assert(1 == saturateCast(f32, f64(1)));                                 // 0x0000004
+    assert(1000.123 == saturateCast(f32, f64(1000.123)));                   // 0x0000004
+    assert(-0.0 == saturateCast(f64, f64(-0.0)));                           // 0x0000004
+    assert(0.0 == saturateCast(f64, f64(0.0)));                             // 0x0000004
+    assert(1 == saturateCast(f64, f64(1)));                                 // 0x0000004
+    assert(1000.123 == saturateCast(f64, f64(1000.123)));                   // 0x0000004
+    assert(nonInfMaxValue(f64) == saturateCast(f64, nonInfMaxValue(f64)));  // 0x0000004
+
+    // $ zig test modules/zig-misc/src/maxmin_value.zig --test-filter saturateCast
+    // lld: error: undefined symbol: __truncdfhf2
+    // >>> referenced by maxmin_value.zig:233 (/home/wink/prgs/graphics/zig-3d-soft-engine/modules/zig-misc/src/maxmin_value.zig:233)
+    // >>>               zig-cache/test.o:(numCast.107)
+    //assert(nonInfMaxValue(f16) == saturateCast(f16, maxValue(f64)));        // 0x0000008 FAILS
+
+    assert(nonInfMaxValue(f32) == saturateCast(f32, nonInfMaxValue(f64)));  // 0x0000008
+    assert(nonInfMaxValue(f32) == saturateCast(f32, maxValue(f64)));        // 0x0000008
+    assert(nonInfMaxValue(f64) == saturateCast(f64, maxValue(f64)));        // 0x0000008
+
+    assert(f32(-1) == saturateCast(f32, i2(-1)));                           // 0x0000010
+    assert(f64(math.minInt(i128)) == saturateCast(f64, i128(math.minInt(i128))));// 0x0000010
+    assert(f32(math.minInt(i128)) == saturateCast(f32, i128(math.minInt(i128))));// 0x0000010
+
+    assert(nonInfMinValue(f16) == saturateCast(f16, i128(math.minInt(i128)))); // 0x0000020
+
+    assert(f16(0) == saturateCast(f16, u1(0)));                             // 0x0000040
+    assert(f16(0) == saturateCast(f16, i2(0)));                             // 0x0000040
+    assert(f32(0) == saturateCast(f32, i32(0)));                            // 0x0000040
+    assert(f64(123) == saturateCast(f64, i64(123)));                        // 0x0000040
+    assert(f64(math.maxInt(i128)) == saturateCast(f32, i128(math.maxInt(i128))));// 0x0000040
+    assert(f64(math.maxInt(u128)) == saturateCast(f64, u128(math.maxInt(u128))));// 0x0000040
+
+    assert(-1 == saturateCast(i1, f64(-1.0)));                              // 0x0000080
+    assert(-1123 == saturateCast(i32, f64(-1123.9)));                       // 0x0000080
+    assert(-1 == saturateCast(i32, f64(-1.0)));                             // 0x0000080
+    assert(-1123 == saturateCast(i32, f64(-1123.1)));                       // 0x0000080
+    assert(-1123 == saturateCast(i128, f64(-1123.1)));                      // 0x0000080
+    assert(-1123 == saturateCast(i128, f64(-1123.9)));                      // 0x0000080
+    assert(-1 == saturateCast(i128, f64(-1.0)));                            // 0x0000080
+    assert(nonInfMaxValue(f16) == saturateCast(f16, u128(math.maxInt(u128))));// 0x0000080
+    assert(nonInfMaxValue(f32) == saturateCast(f32, u128(math.maxInt(u128))));// 0x0000080
+
+    assert(nonInfMinValue(i128) == saturateCast(i128, minValue(f64)));      // 0x0000100
+    assert(nonInfMinValue(i128) == saturateCast(i128, nonInfMinValue(f64)));// 0x0000100
+    assert(nonInfMinValue(i1) == saturateCast(i1, minValue(f64)));          // 0x0000100
+    assert(nonInfMinValue(i1) == saturateCast(i1, nonInfMinValue(f64)));    // 0x0000100
+    assert(-1 == saturateCast(i1, f64(-1123.1)));                           // 0x0000100
+    assert(-1 == saturateCast(i1, f64(-1123.9)));                           // 0x0000100
+    assert(nonInfMinValue(i32) == saturateCast(i32, nonInfMinValue(f64)));  // 0x0000100
+    assert(nonInfMinValue(i32) == saturateCast(i32, minValue(f64)));        // 0x0000100
+    assert(nonInfMinValue(u1) == saturateCast(u1, minValue(f64)));          // 0x0000100
+    assert(nonInfMinValue(u1) == saturateCast(u1, nonInfMinValue(f64)));    // 0x0000100
+    assert(nonInfMinValue(u32) == saturateCast(u32, minValue(f64)));        // 0x0000100
+    assert(nonInfMinValue(u32) == saturateCast(u32, nonInfMinValue(f64)));  // 0x0000100
+    assert(nonInfMinValue(u128) == saturateCast(u128, minValue(f64)));      // 0x0000100
+    assert(nonInfMinValue(u128) == saturateCast(u128, nonInfMinValue(f64)));// 0x0000100
+
+    assert(1123 == saturateCast(i32, f64(1123.9)));                         // 0x0000200
+    assert(0 == saturateCast(u1, f64(-0.0)));                               // 0x0000200
+    assert(0 == saturateCast(i1, f64(-0.0)));                               // 0x0000200
+    assert(0 == saturateCast(i1, f64(0.0)));                                // 0x0000200
+    assert(0 == saturateCast(i32, f64(-0.0)));                              // 0x0000200
+    assert(0 == saturateCast(i32, f64(0.0)));                               // 0x0000200
+    assert(1 == saturateCast(i32, f64(1)));                                 // 0x0000200
+    assert(1123 == saturateCast(i32, f64(1123.1)));                         // 0x0000200
+    assert(1123 == saturateCast(i32, f64(1123.9)));                         // 0x0000200
+    assert(0 == saturateCast(u32, f64(-0.0)));                              // 0x0000200
+    assert(0 == saturateCast(u32, f64(0.0)));                               // 0x0000200
+    assert(1 == saturateCast(u32, f64(1)));                                 // 0x0000200
+    assert(1123 == saturateCast(u32, f64(1123)));                           // 0x0000200
+    assert(0 == saturateCast(u128, f64(-0.0)));                             // 0x0000200
+    assert(0 == saturateCast(u128, f64(0.0)));                              // 0x0000200
+    assert(1 == saturateCast(u128, f64(1)));                                // 0x0000200
+    assert(1123 == saturateCast(u128, f64(1123)));                          // 0x0000200
 
 // Fixed with ziglang/zig PR #1820 (https://github.com/ziglang/zig/pull/1820) if and when it gets merged
 
@@ -390,61 +538,105 @@ test "saturateCast" {
 //   lld: error: undefined symbol: __fixdfti
 //   >>> referenced by maxmin_value.zig:237 (/home/wink/prgs/graphics/zig-3d-soft-engine/modules/zig-misc/src/maxmin_value.zig:237)
 //   >>>               zig-cache/test.o:(numCast.104)
-//    assert(1 == saturateCast(i65, f64(1.0)));
-//    assert(1 == saturateCast(i128, f64(1.0)));
+    assert(1 == saturateCast(i65, f64(1.0)));                               // 0x0000200
+    assert(1 == saturateCast(i128, f64(1.0)));                              // 0x0000200
+    assert(0 == saturateCast(i128, f64(-0.0)));                             // 0x0000200
+    assert(0 == saturateCast(i128, f64(0.0)));                              // 0x0000200
+    assert(1 == saturateCast(i128, f64(1.0)));                              // 0x0000200
+    assert(1123 == saturateCast(i128, f64(1123.1)));                        // 0x0000200
+    assert(1123 == saturateCast(i128, f64(1123.9)));                        // 0x0000200
+    assert(0 == saturateCast(u1, f64(0.0)));                                // 0x0000200
+    assert(1 == saturateCast(u1, f64(1)));                                  // 0x0000200
 
-//    assert(nonInfMinValue(i128) == saturateCast(i128, minValue(f64)));
-//    assert(nonInfMinValue(i128) == saturateCast(i128, nonInfMinValue(f64)));
-//    assert(-1123 == saturateCast(i128, f64(-1123.1)));
-//    assert(-1123 == saturateCast(i128, f64(-1123.9)));
-//    assert(-1 == saturateCast(i128, f64(-1.0)));
-//    assert(0 == saturateCast(i128, f64(-0.0)));
-//    assert(0 == saturateCast(i128, f64(0.0)));
-//    assert(1 == saturateCast(i128, f64(1.0)));
-//    assert(1123 == saturateCast(i128, f64(1123.1)));
-//    assert(1123 == saturateCast(i128, f64(1123.9)));
-//    assert(nonInfMaxValue(i128) == saturateCast(i128, nonInfMaxValue(f64)));
-//    assert(nonInfMaxValue(i128) == saturateCast(i128, maxValue(f64)));
+    assert(1 == saturateCast(u1, f64(1123)));                               // 0x0000400
+    assert(1 == saturateCast(u1, f64(1123.9)));                             // 0x0000400
+    assert(0 == saturateCast(i1, f64(1)));                                  // 0x0000400
+    assert(0 == saturateCast(i1, f64(1123.1)));                             // 0x0000400
+    assert(0 == saturateCast(i1, f64(1123.9)));                             // 0x0000400
+    assert(nonInfMaxValue(i1) == saturateCast(i1, nonInfMaxValue(f64)));    // 0x0000400
+    assert(nonInfMaxValue(i1) == saturateCast(i1, maxValue(f64)));          // 0x0000400
 
-    // u0 not working
-    //  $ zig test src/window.zig --test-filter saturateCast
-    //  zig: ../src/codegen.cpp:2816: LLVMOpaqueValue* ir_render_cast(CodeGen*, IrExecutable*, IrInstructionCast*): Assertion `expr_val' failed.
-    //  Aborted (core dumped)
-    //assert(misc.nonInfMinValue(u0) == saturateCast(u0, misc.minValue(f64)));
-    //assert(misc.nonInfMinValue(u0) == saturateCast(u0, misc.nonInfMinValue(f64)));
-    //assert(0 == saturateCast(u0, f64(-0.0)));
-    //assert(0 == saturateCast(u0, f64(0.0)));
-    //assert(0 == saturateCast(u0, f64(1)));
-    //assert(0 == saturateCast(u0, f64(1123)));
-    //assert(0 == saturateCast(i32, f64(1123.9)));
-    //assert(misc.nonInfMaxValue(u0) == saturateCast(u0, misc.nonInfMaxValue(f64)));
-    //assert(misc.nonInfMaxValue(u0) == saturateCast(u0, misc.maxValue(f64)));
+    assert(nonInfMaxValue(i32) == saturateCast(i32, nonInfMaxValue(f64)));  // 0x0000400
+    assert(nonInfMaxValue(i32) == saturateCast(i32, maxValue(f64)));        // 0x0000400
+    assert(nonInfMaxValue(i32) == saturateCast(i32, maxValue(f64)));        // 0x0000400
+    assert(nonInfMaxValue(i128) == saturateCast(i128, nonInfMaxValue(f64)));// 0x0000400
+    assert(nonInfMaxValue(i128) == saturateCast(i128, maxValue(f64)));      // 0x0000400
+    assert(nonInfMaxValue(u1) == saturateCast(u1, nonInfMaxValue(f64)));    // 0x0000400
+    assert(nonInfMaxValue(u1) == saturateCast(u1, maxValue(f64)));          // 0x0000400
+    assert(nonInfMaxValue(u32) == saturateCast(u32, nonInfMaxValue(f64)));  // 0x0000400
+    assert(nonInfMaxValue(u32) == saturateCast(u32, maxValue(f64)));        // 0x0000400
+    assert(nonInfMaxValue(u128) == saturateCast(u128, nonInfMaxValue(f64)));// 0x0000400
+    assert(nonInfMaxValue(u128) == saturateCast(u128, maxValue(f64)));      // 0x0000400
 
-    assert(nonInfMinValue(u1) == saturateCast(u1, minValue(f64)));
-    assert(nonInfMinValue(u1) == saturateCast(u1, nonInfMinValue(f64)));
-    assert(0 == saturateCast(u1, f64(-0.0)));
-    assert(0 == saturateCast(u1, f64(0.0)));
-    assert(1 == saturateCast(u1, f64(1)));
-    assert(1 == saturateCast(u1, f64(1123)));
-    assert(1 == saturateCast(u1, f64(1123.9)));
-    assert(nonInfMaxValue(u1) == saturateCast(u1, nonInfMaxValue(f64)));
-    assert(nonInfMaxValue(u1) == saturateCast(u1, maxValue(f64)));
+}
 
-    assert(nonInfMinValue(u32) == saturateCast(u32, minValue(f64)));
-    assert(nonInfMinValue(u32) == saturateCast(u32, nonInfMinValue(f64)));
-    assert(0 == saturateCast(u32, f64(-0.0)));
-    assert(0 == saturateCast(u32, f64(0.0)));
-    assert(1 == saturateCast(u32, f64(1)));
-    assert(1123 == saturateCast(u32, f64(1123)));
-    assert(nonInfMaxValue(u32) == saturateCast(u32, nonInfMaxValue(f64)));
-    assert(nonInfMaxValue(u32) == saturateCast(u32, maxValue(f64)));
+test "saturateCast.ints" {
+    if (DBG) warn("\n");
 
-    assert(nonInfMinValue(u128) == saturateCast(u128, minValue(f64)));
-    assert(nonInfMinValue(u128) == saturateCast(u128, nonInfMinValue(f64)));
-    assert(0 == saturateCast(u128, f64(-0.0)));
-    assert(0 == saturateCast(u128, f64(0.0)));
-    assert(1 == saturateCast(u128, f64(1)));
-    assert(1123 == saturateCast(u128, f64(1123)));
-    assert(nonInfMaxValue(u128) == saturateCast(u128, nonInfMaxValue(f64)));
-    assert(nonInfMaxValue(u128) == saturateCast(u128, maxValue(f64)));
+    // u0 special case
+    assert(u1(0)      == saturateCast(u1, u0(0)));    // 0x0400000
+    assert(u0(0)      == saturateCast(u0, i8(127)));  // 0x0800000
+    assert(u0(0)      == saturateCast(u0, i8(-128))); // 0x0800000
+
+    // signs equal
+    assert(i1(-1)   == saturateCast(i1, i1(-1)));     // 0x0001000
+    assert(i8(-128) == saturateCast(i8, i8(-128)));   // 0x0001000
+    assert(i8(-64)  == saturateCast(i8, i7(-64)));    // 0x0001000
+
+    assert(i1(-1)   == saturateCast(i1, i8(-128)));   // 0x0002000
+    assert(i7(-64)  == saturateCast(i7, i8(-128)));   // 0x0002000
+
+    assert(u8(0) == saturateCast(u8, u8(0)));         // 0x0004000
+    assert(u8(255) == saturateCast(u8, u8(255)));     // 0x0004000
+
+    assert(u7(0)    == saturateCast(u7, u8(0)));      // 0x0004000
+    assert(u8(0)    == saturateCast(u8, u7(0)));      // 0x0004000
+    assert(u8(127)  == saturateCast(u8, u7(127)));    // 0x0004000
+    assert(i1(0)    == saturateCast(i1, i1(0)));      // 0x0004000
+    assert(i8(0)    == saturateCast(i8, i8(0)));      // 0x0004000
+    assert(i8(127)  == saturateCast(i8, i8(127)));    // 0x0004000
+    assert(i7(0)    == saturateCast(i7, i8(0)));      // 0x0004000
+    assert(i8(0)    == saturateCast(i8, i7(0)));      // 0x0004000
+    assert(i8(63)   == saturateCast(i8, i7(63)));     // 0x0004000
+
+    assert(u7(127)  == saturateCast(u7, u8(255)));    // 0x0008000
+    assert(i1(0)    == saturateCast(i1, i8(1)));      // 0x0008000
+    assert(i7(63)   == saturateCast(i7, i8(127)));    // 0x0008000
+
+    // signs != v is signed
+    assert(u1(0)      == saturateCast(u1, i8(-128))); // 0x0010000
+    assert(u7(0)      == saturateCast(u7, i8(-128))); // 0x0010000
+    assert(u128(0)    == saturateCast(u128, i8(-128)));// 0x0010000
+
+    assert(u8(0)      == saturateCast(u8, i8(0)));    // 0x0020000
+    assert(u128(127)  == saturateCast(u128, i8(127)));// 0x0020000
+    assert(u8(127)    == saturateCast(u8, i8(127)));  // 0x0020000
+    assert(u128(0)    == saturateCast(u128, i8(0)));  // 0x0020000
+    assert(u128(0)    == saturateCast(u128, i8(0)));  // 0x0020000
+    assert(u128(math.maxInt(i128)) == saturateCast(u128, i128(math.maxInt(i128)))); // 0x0020000
+
+    assert(u1(0)      == saturateCast(u1, i8(0)));    // 0x0040000
+    assert(u7(0)      == saturateCast(u7, i8(0)));    // 0x0040000
+
+    assert(u7(127)    == saturateCast(u7, i8(127)));  // 0x0080000
+    assert(u1(1)      == saturateCast(u1, i8(127)));  // 0x0080000
+    assert(u6(63)     == saturateCast(u6, i8(127)));  // 0x0080000
+    assert(u7(127)    == saturateCast(u7, i8(127)));  // 0x0080000
+    assert(u8(255)    == saturateCast(u8, i9(255)));  // 0x0080000
+
+    // signs != v is unsigned
+    assert(i8(0)       == saturateCast(i8, u7(0)));   // 0x0100000
+    assert(i8(127)     == saturateCast(i8, u7(127))); // 0x0100000
+    assert(i128(255)  == saturateCast(i128, u8(255)));// 0x0100000
+
+    assert(i1(0)      == saturateCast(i1, u8(127)));  // 0x0200000
+    assert(i7(63)     == saturateCast(i7, u8(128)));  // 0x0200000
+    assert(i8(127)    == saturateCast(i8, u8(255)));  // 0x0200000
+    assert(i8(127)    == saturateCast(i8, u9(256)));  // 0x0200000
+    assert(i1(0)     == saturateCast(i1, u128(math.maxInt(u128)))); // 0x0200000
+
+    assert(i1(0)     == saturateCast(i1, u1(0)));     // 0x0400000
+    assert(i1(0)     == saturateCast(i1, u8(0)));     // 0x0400000
+    assert(i7(0)     == saturateCast(i7, u8(0)));     // 0x0400000
+    assert(i7(1)     == saturateCast(i7, u8(1)));     // 0x0400000
 }
